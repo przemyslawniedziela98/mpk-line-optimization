@@ -1,14 +1,16 @@
-import time
-import logging
 import configparser
+import logging
+import time
 from concurrent.futures import ThreadPoolExecutor
 from functools import cached_property
 from typing import Dict, List
-import requests
 import numpy as np
-import geopy.distance
 import pandas as pd
-from dataclasses import dataclass
+import requests
+import geopy.distance
+import geopandas as gpd
+import osmnx as ox
+from dataclasses import dataclass, field
 
 
 logging.basicConfig(
@@ -267,3 +269,57 @@ class MpkSourcing:
         self.process_lines_to_stops()
         self.process_lines_stops_coordinates()
         logger.info("Data fetching and processing completed.")
+
+@dataclass
+class OpenStreetMapData:
+    """Class for retrieving OpenStreetMap (OSM) data, including buildings and streets.
+
+    Attributes:
+        place (str): Name of the location to retrieve data for.
+        buildings_df (gpd.GeoDataFrame): GeoDataFrame containing building geometries.
+        streets_df (gpd.GeoDataFrame): GeoDataFrame containing street geometries.
+    """
+
+    place: str = "Kraków, Poland"
+    buildings_df: gpd.GeoDataFrame = field(default_factory=gpd.GeoDataFrame)
+    streets_df: gpd.GeoDataFrame = field(default_factory=gpd.GeoDataFrame)
+
+    def __post_init__(self) -> None:
+        """Initializes the OpenStreetMapData class by retrieving buildings and streets."""
+        logging.info(f"Initializing OSM data retrieval for: {self.place}")
+        try:
+            self._fetch_buildings()
+            self._fetch_streets()
+        except Exception as e:
+            logging.error(f"Error initializing OSM data: {e}")
+
+    def _fetch_buildings(self) -> None:
+        """Fetches building geometries from OSM and computes their centroids."""
+        self.buildings_df = ox.geometries_from_place(
+            self.place, tags={"building": True}
+        )[['geometry']].dropna()
+        logging.info(f"Successfully retrieved {len(self.buildings_df)} buildings.")
+
+        self.buildings_df = self._calculate_centroid(self.buildings_df)
+
+    def _fetch_streets(self) -> None:
+        """Fetches street geometries from OSM as a GeoDataFrame."""
+        graph = ox.graph_from_place(self.place, network_type="all")
+        self.streets_df = ox.graph_to_gdfs(graph, nodes=False)
+        logging.info(f"Successfully retrieved {len(self.streets_df)} street segments.")
+
+    @staticmethod
+    def _calculate_centroid(df: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+        """Calculates the centroid of each building polygon.
+
+        Args:
+            df (gpd.GeoDataFrame): GeoDataFrame containing building geometries.
+
+        Returns:
+            gpd.GeoDataFrame: GeoDataFrame with centroid coordinates.
+        """
+        df = df.copy()
+        df["centroid"] = df.geometry.centroid
+        df["lat"] = df["centroid"].y
+        df["lng"] = df["centroid"].x
+        return df.drop(columns=["centroid"])
